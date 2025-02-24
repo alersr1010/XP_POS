@@ -82,7 +82,7 @@ def menu():
                 print("Se precisar fazer mais cálculos, volte a me executar.")
                 break
             else:
-                print("Formato Incorreto")
+                print("==========================================")
         except:
             print("Erro")
     
