@@ -1,6 +1,6 @@
-# LEMBRAR DE INSTALAR  E IMPORTAR yahooquery
+import seaborn as sns
 from yahooquery import Ticker
-import warnings 
+import warnings
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
@@ -8,252 +8,331 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import numpy as np
 
-
+# Ignorando warnings de 'FutureWarning' e 'SettingWithCopyWarning' para não poluir a saída
 warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=pd.errors.SettingWithCopyWarning)  # Adicionando ignorar para SettingWithCopyWarning
+
 
 #===========================================================================================
-def dados_acao ( acao = 'BBDC4.SA' ,data_inicio = "2008-1-1" , data_fim=None):
-    # Definindo os tickers
+def dados_acao(acao='BBDC4.SA', data_inicio="2010-1-1", data_fim=None):
+    """
+    Função para obter os dados históricos de uma ação específica através do Yahoo Finance.
+    
+    Parâmetros:
+        acao (str): O ticker da ação que você quer buscar (ex: 'BBDC4.SA').
+        data_inicio (str): Data de início para a busca de dados (formato 'AAAA-MM-DD').
+        data_fim (str): Data de fim para a busca de dados (formato 'AAAA-MM-DD').
+        
+    Retorna:
+        tuple: DataFrame com os dados sumarizados, DataFrame original com dados diários, e objeto Ticker.
+    """
+    # Definindo os tickers, aqui apenas um ticker é utilizado
     tickers = [acao]
 
-    # Criando um DataFrame vazio
+    # Criando um DataFrame vazio para armazenar os dados
     new_data = pd.DataFrame()
 
-    # Obtendo os dados históricos
+    # Obtendo os dados históricos da ação
     try:
+        # Criando o objeto Ticker
         abev = Ticker(tickers)
 
+        # Obtendo histórico da ação em um DataFrame
         abev1 = pd.DataFrame(abev.history(start=data_inicio, end=data_fim))
 
         # Resetando o índice para transformar a coluna de datas em uma coluna regular
         abev1 = abev1.reset_index()
-        # Convertendo a coluna 'Date' para o formato datetime
+        # Convertendo a coluna 'Date' para o formato datetime e removendo o fuso horário
         abev1['date'] = pd.to_datetime(abev1['date'], utc=True).dt.tz_localize(None)
 
-        # definindo um acoluna de retorno simples ((p1 - po)/po)*100 de forma a calcular a evolução em % ao longo do mês 
-        abev1['retorno_simples']=(abev1['close']/abev1['close'].shift(1)-1)*100
-
-        # definindo um acoluna de volume simples ((p1 - po)/po)*100 de forma a calcular a evolução em % ao longo do mês 
-        abev1['volume_simples']=(abev1['volume']/abev1['volume'].shift(1)-1)*100
-
-        # Define as features (X)  - apenas data e data Unix - numeros, seu quadrado 
-        abev1['DateUnix'] = (abev1['date'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
-        abev1['DateUnix2'] = (abev1['DateUnix'])**2
-
-        # Calcula a média móvel dos últimos 3 dias e o seu quadrado
-        abev1['Med_movel'] = abev1['close'].rolling(window=3).mean()
-        abev1['Med_movel_2'] = abev1['Med_movel']**2
-        abev1 = abev1.dropna()
+        # Calculando o retorno simples como porcentagem
+        abev1['retorno_simples'] = (abev1['close'] / abev1['close'].shift(1) - 1) * 100
         
-        # faz a limpeza dos dados
-        abev1 = abev1[(abev1['volume']!=0) & abev1['close']!=0]
-        abev1 = abev1[(abev1['volume_simples'].abs()<=300)]
+        # Calculando o volume simples como porcentagem
+        abev1['volume_simples'] = (abev1['volume'] / abev1['volume'].shift(1) - 1) * 100
+
+        # Definindo as features (X) - data e número Unix
+        abev1['DateUnix'] = (abev1['date'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
+        abev1['DateUnix2'] = (abev1['DateUnix']) ** 2
+
+        # Fazendo a limpeza dos dados, removendo zeros e valores extremos
+        abev1 = abev1[(abev1['volume'] != 0) & (abev1['close'] != 0)]
+        abev1 = abev1[(abev1['volume_simples'].abs() <= 300)]
         abev1 = abev1.dropna()
 
         # Definindo a coluna 'date' como índice
         abev1.set_index('date', inplace=True)
 
-        #Sumarizando os dados por mês
-        sumarizando = abev1.resample('M').agg({'close': ['mean','median'], 'volume': 'sum' , 'retorno_simples': 'sum' , 'volume_simples': 'sum' })
+        # Sumarizando os dados por mês
+        sumarizando = abev1.resample('M').agg({
+            'close': ['mean', 'median'], 
+            'volume': 'sum', 
+            'retorno_simples': 'sum', 
+            'volume_simples': 'sum'
+        })
 
-        # Reorganizando o MultiIndex
+        # Reorganizando o MultiIndex para colunas com nomes mais amigáveis
         sumarizando.columns = sumarizando.columns.map({
             ('close', 'mean'): 'fechamento_media',
             ('close', 'median'): 'fechamento_mediana',
             ('volume', 'sum'): 'volume_mensal',
             ('retorno_simples', 'sum'): 'retorno_porcent',
             ('volume_simples', 'sum'): 'volume_porcent',
-
         })
 
         # Convertendo o volume para milhões de reais
         sumarizando['volume_mensal'] = sumarizando['volume_mensal'] / 1_000_000
 
-        #filtrando a sumarizacao
-        sumarizando= sumarizando[
-                                   # (sumarizando['volume_porcent'].abs() <= 100) & 
-                                    (sumarizando['retorno_porcent'].abs() <= 100) &
-                                    (sumarizando['volume_porcent'].abs() != 0) & 
-                                    (sumarizando['retorno_porcent'].abs() != 0) 
-                                    ]
+        # Filtrando a sumarização para evitar dados discrepantes
+        sumarizando = sumarizando[
+            (sumarizando['retorno_porcent'].abs() <= 100) &
+            (sumarizando['volume_porcent'].abs() != 0) &
+            (sumarizando['retorno_porcent'].abs() != 0)
+        ]
 
+        return sumarizando, abev1, abev  # Retorna os dados sumarizados, o DataFrame original e o objeto Ticker
 
-
-        return  sumarizando, abev1,abev
-    
-    except Exception as e : #erro de excessão -> conexão com yahoo finance e outras possíveis
-        print (f"Erro  : {e}")
+    except Exception as e:  # Trata exceções para conexões com o Yahoo Finance e outros possíveis erros
+        print(f"Erro  : {e}")  # Exibe a mensagem de erro
 
 #===========================================================================================
-def grafico_uma_linha (x  , y, nome= 'Valores de Fechamento da Ação',label_y = 'Fechamento'):
-        # Gráfico de linha com uma variável
-        plt.figure(figsize=(12, 6))  # Ajusta o tamanho da figura
-        plt.plot(x,y, linestyle='-', color='b',label=label_y) # Plota os dados
-        plt.title(nome)
-        plt.xlabel('Data')
-        plt.ylabel('valor')
-        plt.grid(True)
-        plt.show()
+def grafico_uma_linha(x, y, nome='Valores de Fechamento da Ação', label_y='Fechamento'):
+    """
+    Plota um gráfico de linha com uma variável.
 
+    Parâmetros:
+        x (iterable): Valores do eixo X (ex: datas).
+        y (iterable): Valores do eixo Y (ex: preços de fechamento).
+        nome (str): Título do gráfico.
+        label_y (str): Rótulo do eixo Y.
+    """
+    plt.figure(figsize=(12, 6))  # Ajusta o tamanho da figura
+    plt.plot(x, y, linestyle='-', color='b', label=label_y)  # Plota os dados
+    plt.title(nome)  # Define o título do gráfico
+    plt.xlabel('Data')  # Rótulo do eixo X
+    plt.ylabel('Valor')  # Rótulo do eixo Y
+    plt.grid(True)  # Adiciona grade ao gráfico
+    plt.show()  # Exibe o gráfico
 
 #===========================================================================================
-def grafico_de_barras (x  , y, nome, label_y1="Fechamento"):
+def grafico_de_barras(x, y, nome, label_y1="Fechamento"):
+    """
+    Plota um gráfico de barras.
 
-    # Criando o gráfico de barras
-    plt.bar(x, y, color='b', width=0.5)
+    Parâmetros:
+        x (iterable): Valores do eixo X (ex: categorias).
+        y (iterable): Valores do eixo Y (ex: quantidades).
+        nome (str): Título do gráfico.
+        label_y1 (str): Rótulo do eixo Y (opcional).
+    """
+    plt.figure(figsize=(10, 5))  # Ajusta o tamanho da figura
+    sns.barplot(x=x, y=y)  # Plota os dados
+    plt.title(nome)  # Define o título do gráfico
+    plt.xlabel('Categorias')  # Rótulo do eixo X
+    plt.ylabel(label_y1)  # Rótulo do eixo Y
+    plt.show()  # Exibe o gráfico
 
-    # Adicionando título e rótulos
-    plt.title(nome)
-    plt.xlabel('Categorias')
-    plt.ylabel('Valores')
-
-    # Incluindo rótulos inclinados
-    plt.xticks(rotation=45)  # Inclina os rótulos em 45 graus
-    # Exibindo o gráfico
-    plt.grid(axis='y')
-    plt.show()
 #===========================================================================================
-def grafico_de_dispersao (y1  , y2, titulo, nome_eixo_1, nome_eixo_2):
-     # Plota o gráfico de dispersão entre 2 variáveis
-    plt.figure(figsize=(12, 6))
-    plt.scatter(y1, y2)
-    plt.title(titulo)
-    plt.xlabel(nome_eixo_1)
-    plt.ylabel(nome_eixo_2)
-    plt.grid(True)
-    plt.show()
+def grafico_de_dispersao(y1, y2, titulo, nome_eixo_1, nome_eixo_2):
+    """
+    Plota um gráfico de dispersão entre duas variáveis.
 
-#===========================================================================
-def grafico_2_linhas(x, y1, y2, titulo='Gráfico de Linhas', rotulo_x='Eixo X', rotulo_y='Eixo Y', label_y1="Y1", label_y2 = "Y2"):
+    Parâmetros:
+        y1 (iterable): Valores do eixo Y1 (ex: Volume).
+        y2 (iterable): Valores do eixo Y2 (ex: Preços).
+        titulo (str): Título do gráfico.
+        nome_eixo_1 (str): Rótulo do eixo X.
+        nome_eixo_2 (str): Rótulo do eixo Y.
+    """
+    plt.figure(figsize=(12, 6))  # Ajusta o tamanho da figura
+    plt.scatter(y1, y2)  # Plota os dados de dispersão
+    plt.title(titulo)  # Define o título do gráfico
+    plt.xlabel(nome_eixo_1)  # Rótulo do eixo X
+    plt.ylabel(nome_eixo_2)  # Rótulo do eixo Y
+    plt.grid(True)  # Adiciona grade ao gráfico
+    plt.show()  # Exibe o gráfico
 
-    plt.figure(figsize=(10, 5))
-    
+#===========================================================================================
+def grafico_2_linhas(x, y1, y2, titulo='Gráfico de Linhas', rotulo_x='Eixo X', rotulo_y='Eixo Y', label_y1="Y1", label_y2="Y2"):
+    """
+    Plota um gráfico de linhas com duas variáveis.
+
+    Parâmetros:
+        x (iterable): Valores do eixo X (ex: datas).
+        y1 (iterable): Valores do eixo Y1 (ex: Fechamento real).
+        y2 (iterable): Valores do eixo Y2 (ex: Previsão).
+        titulo (str): Título do gráfico.
+        rotulo_x (str): Rótulo do eixo X.
+        rotulo_y (str): Rótulo do eixo Y.
+        label_y1 (str): Rótulo da linha Y1.
+        label_y2 (str): Rótulo da linha Y2.
+    """
+    plt.figure(figsize=(10, 5))  # Ajusta o tamanho da figura
+
     # Plotando as linhas
-    plt.plot(x, y1, label=label_y1, color='blue', marker='o')
-    plt.plot(x, y2, label=label_y2, color='red', marker='x')
+    plt.plot(x, y1, label=label_y1, color='blue', marker='o')  # Linha para y1
+    plt.plot(x, y2, label=label_y2, color='red', marker='x')  #
+    # Linha para y2
 
     # Adicionando título e rótulos
-    plt.title(titulo)
-    plt.xlabel(rotulo_x)
-    plt.ylabel(rotulo_y)
+    plt.title(titulo)  # Define o título do gráfico
+    plt.xlabel(rotulo_x)  # Rótulo do eixo X
+    plt.ylabel(rotulo_y)  # Rótulo do eixo Y
 
-    # Adicionando legenda
-    plt.legend()
+    # Adicionando legenda para as linhas
+    plt.legend()  # Mostra a legenda no gráfico
 
     # Exibindo o gráfico
-    plt.grid()
-    plt.show()
+    plt.grid()  # Adiciona grade ao gráfico
+    plt.show()  # Exibe o gráfico
 
 #===========================================================================================
 def modelo_regressao_scikit(dados, demais_dados, complemento):
-     # Prepare os dados para o modelo de regressão
-     #tamanho da predicao 1/3 dos dados
-    tamanho = len(dados)//3
-    
+    """
+    Cria e treina um modelo de regressão linear para prever preços de ações.
+
+    Parâmetros:
+        dados (pd.Series): Preços de fechamento da ação.
+        demais_dados (pd.DataFrame): DataFrame com outras features (ex: abertura e volume).
+        complemento (str): Descrição complementar para mensagens de saída.
+
+    Retorna:
+        model: O modelo de regressão treinado.
+    """
+    # Tamanho da amostra a ser prevista (1/3 dos dados)
+    tamanho = len(dados) // 3
+
     # Define as features (X) e o target (y)
-    X = (demais_dados.shift(-(tamanho))).dropna()  # Adicione mais features se desejar
-    y = (dados.shift(-(tamanho))).dropna()  # Prever 1/3 do tamanho dos dados enviados
+    X = (demais_dados.shift(-tamanho)).dropna()  # Features para prever
+    y = (dados.shift(-tamanho)).dropna()  # Previsão a partir dos dados de fechamento
 
     # Divida os dados em conjuntos de treinamento e teste
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     # Crie e treine o modelo de regressão linear
-    model = LinearRegression()
-    model.fit(X_train, y_train)
+    model = LinearRegression()  # Inicializa modelo de regressão linear
+    model.fit(X_train, y_train)  # Treina o modelo
 
     # Faça previsões no conjunto de teste
-    y_pred = model.predict(X_test)
+    y_pred = model.predict(X_test)  # Previsões para o conjunto de teste
 
     # Avalie o modelo
-    mse = mean_squared_error(y_test, y_pred)
-    rmse = np.sqrt(mse)
-    print(f'Erro médio quadrático (MSE): {mse}')
-    print(f'Raiz do erro médio quadrático (RMSE): {rmse}')
-    resultado = pd.DataFrame((dados.tail(tamanho)).dropna())
+    mse = mean_squared_error(y_test, y_pred)  # Erro médio quadrático
+    rmse = np.sqrt(mse)  # Raiz do erro médio quadrático
+    print(f'Erro médio quadrático (MSE): {mse}')  # Exibe MSE
+    print(f'Raiz do erro médio quadrático (RMSE): {rmse}')  # Exibe RMSE
 
-    # Faça previsões no conjunto final
-    y_pred = model.predict((demais_dados.tail(tamanho)).dropna())
-    #resultado = resultado.dropna()
-    #previd = pd.DataFrame(y_pred)
-    resultado['previsao'] = y_pred
-    resultado['erro_%'] = ((resultado['previsao'] - resultado['close'])/resultado['close'])*100.0
-    grafico_uma_linha(resultado.index,resultado['erro_%'], f"Gráfico do Erro na previsão em (%) com (MSE): {mse}")
+    # Cria um DataFrame para armazenar resultados
+    resultado = pd.DataFrame((dados.tail(tamanho)).dropna())  # Dados reais
+
+    # Faça previsões para o conjunto final
+    y_pred = model.predict((demais_dados.tail(tamanho)).dropna())  # Previsões para dados finais
+
+    resultado['previsao'] = y_pred  # Armazena as previsões
+    # Calcula o erro percentual
+    resultado['erro_%'] = ((resultado['previsao'] - resultado['close']) / resultado['close']) * 100.0
+
+    # Gráfico do erro na previsão em porcentagem
+    grafico_uma_linha(resultado.index, resultado['erro_%'], f"Gráfico do Erro na previsão em (%) com (MSE): {mse}")
+    
+    # Gráfico dos valores reais e previstos
     grafico_2_linhas(resultado.index, resultado['close'], resultado['previsao'], f'Correto vs Previsto dos dados - DADOS TESTE - {complemento}', 'Data', 'Fechamento', 'Fechamento Real', 'Previsão')
 
-    print(resultado)
+    print(resultado)  # Exibe resultados finais
 
-    return model
+    return model  # Retorna o modelo treinado
+
 #===========================================================================
-def previsao_futuro(abev1,model,datas):
+def previsao_futuro(abev1, model, datas):
+    """
+    Faz previsões futuras de preços com base em um modelo de regressão linear.
 
+    Parâmetros:
+        abev1 (pd.DataFrame): Histórico de preços da ação.
+        model: O modelo de regressão treinado.
+        datas (pd.date_range): Faixa de datas futuras para previsão.
+
+    Retorna:
+        resultado: DataFrame com previsões e dados originais.
+    """
     # Resetando o índice para transformar a coluna de datas em uma coluna regular
     abev1 = abev1.reset_index()
-    # Define as features (X)  - apenas data e data Unix - numeros, seu quadrado 
+    tamanho= len(abev1['date'])
+    fechamento = abev1['close']
+    # Define as features (X)  - apenas data e data Unix - numeros, seu quadrado
     novas_datas = pd.DataFrame({'date': datas})
     abev1 = pd.concat([abev1,novas_datas], ignore_index = True)
-    for i in range(2,len(abev1['date'])):
-        if i >= 3:  # Para garantir que temos 3 valores anteriores
-            abev1.loc[i, 'close'] = abev1['close'].iloc[i-3:i].mean()
-    
-    abev1['DateUnix'] = (abev1['date'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
-    abev1['DateUnix2'] = (abev1['DateUnix'])**2
+    for i in range(tamanho,len(abev1['date'])):
+        if i >= 3:  # Para garantir que temos 60 valores anteriores
+            abev1.loc[i, 'open'] = abev1['open'].iloc[i-60:i].mean()
+            abev1.loc[i, 'volume'] = abev1['volume'].iloc[i-60:i].mean()
+            abev1.loc[i, 'close'] = abev1['close'].iloc[i-60:i].mean()
 
-    # Calcula a média móvel dos últimos 3 dias e o seu quadrado
-    abev1['Med_movel'] = abev1['close'].rolling(window=3).mean()
-    abev1['Med_movel_2'] = abev1['Med_movel']**2
 
-    # Definindo a coluna 'date' como índice
-    abev1.set_index('date', inplace=True)
-    abev1 = abev1.dropna()
-    resultado = pd.DataFrame(abev1['close'])
-    abev1.drop('close',axis=1,inplace = True)
-
+     # Definindo a coluna 'date' como índice
+    abev1.set_index('date', inplace=True)   
     print('===============================================================')
 
     # Faça previsões no conjunto final
-    y_pred = model.predict(abev1)
-    resultado['retorno_sentido']=  (resultado['close']> resultado['close'].shift(1)).astype(int)
-    resultado['previsao'] = y_pred
+    x_pred = abev1[['open','volume']]
 
-    grafico_uma_linha(resultado.index,resultado['previsao'], f"Gráfico de previsão para os próximos 60 dias ")
+    abev1['previsao'] = model.predict(x_pred)
+ 
+    resultado = abev1.tail(len(abev1)-tamanho+1)
 
-    print(resultado)
-    return resultado   
-          
-#===========================================================================
-#sumarizando, abev1, abev = dados_acao('BBDC4.SA')
+    #grafico_uma_linha(resultado.index,resultado['previsao'], f"Gráfico de previsão para os próximos 60 dias ")
+    grafico_2_linhas(resultado.index, resultado['close'], resultado['previsao'], f'Previsto vs Média móvel dos dados ', 'Data', 'Fechamento', 'Fechamento Média Móvel', 'Previsão')
 
-# Entrada do usuário
-acao_nome = input("Digite o nome da ação (ex: BBDC4.SA): ")
-data_inicio_str = input("Digite a data de início (AAAA-MM-DD): ")
-data_fim_str = input("Digite a data de fim (AAAA-MM-DD, deixe em branco para hoje): ")
-# Verifica se a data final foi informada
-data_fim = None
-if data_fim_str:
-  data_fim = data_fim_str
+    resultado['retorno_sentido']=  (resultado['previsao']> resultado['previsao'].shift(1)).astype(int)
 
-sumarizando, abev1, abev = dados_acao(acao_nome, data_inicio_str, data_fim)
+    return resultado
 
-grafico_uma_linha(abev1.index,abev1['close'], "Gráfico do Fechamento da Ação do Bradesco", 'Valor de Fechamento')
-grafico_de_barras(sumarizando.index,sumarizando['volume_mensal'],'Gráfico do Volume Mensal retirado dados discrepantes')
-grafico_de_dispersao (abev1['volume'] , abev1['close'] , "Relação entre a variação do Volume Negociado com o Preço de Fechamento", 'Volume', 'Preço de Fechamento')
-print('===============================================================')
-print('Simulando para previsão com dados open e volume, para previsões futuras precisaria definir eses 2 dados \n')
-modelo_regressao_scikit(abev1['close'],abev1[['open','volume']],'Considerando dados open e volume')
-print('===============================================================')
-print('===============================================================')
-print('Simulando para previsão com dados close que mé media móvel e data, para previsões futuras mais fácil de estimular\n')
-model= modelo_regressao_scikit(abev1['close'],abev1[['DateUnix','DateUnix2', 'Med_movel', 'Med_movel_2']], 'Considerando dados simulados de close e apenas a data')
+#===========================================================================================
+# Código principal para execução do script
 
-# Data atual
-ultimo_dia = abev1.index[-1]
+"""
+Execução principal do script. Obtém dados de ações, gera gráficos e realiza previsões.
+"""
+# Solicitar informações do usuário
+acao = input("Digite o ticker da ação (ex: BBDC4.SA): ")  # Ticker da ação desejada
+if acao == "":
+    acao = "BBDC4.SA"
+data_inicio = input("Digite a data de início (AAAA-MM-DD): ")  # Data de início para busca de dados
+if data_inicio=="":
+    data_inicio = "2010-01-01"
+data_fim = input("Digite a data de fim (AAAA-MM-DD): ")  # Data de fim para busca de dados
+if data_fim=="":
+    data_fim = None
+
+# Obtendo e processando os dados da ação
+sumarizado, dados, obj = dados_acao(acao, data_inicio, data_fim)  # Chama a função para obter dados
+
+# Exibindo gráfico de fechamento da ação
+grafico_uma_linha(dados.index, dados['close'], 'Fechamento das Ações', 'Fechamento')
+
+# Exibindo gráfico de volume mensal das ações
+grafico_de_barras(sumarizado.index, sumarizado['volume_mensal'], 'Volume Mensal das Ações')  # Gráfico de barras para volume mensal
+
+# Exibindo gráfico de dispersão entre volume e fechamento
+grafico_de_dispersao(dados['volume'], dados['close'], 'Dispersão entre Volume e Fechamento', 'Volume', 'Fechamento')  # Gráfico de dispersão
+
+# Treinando o modelo de regressão
+model = modelo_regressao_scikit(dados['close'], dados[['open', 'volume']], acao)  # Chama a função para modelar os dados
+
+# Data Importantes
+ultimo_dia = dados.index[-1]
 data_atual = ultimo_dia
 proximo_dia_util = ultimo_dia + pd.tseries.offsets.BDay(1)
-# Criando uma série de datas para os próximos 60 dias
-datas_futuras = pd.date_range(start=proximo_dia_util, periods=60, freq='D') 
-resultado = previsao_futuro(abev1[['close','DateUnix','DateUnix2', 'Med_movel', 'Med_movel_2']].tail(10),model,datas_futuras)
-if not sumarizando.empty and not abev1.empty: 
-    previsao_proximo_dia = resultado.loc[proximo_dia_util, 'previsao'] if proximo_dia_util in resultado.index else "Não disponível"
-    retorno_sentido = resultado.loc[proximo_dia_util, 'retorno_sentido'] if proximo_dia_util in resultado.index else "Não disponível"
+
+# Previsão dos próximos 60 dias úteis
+data_futura = pd.date_range(start=proximo_dia_util, periods=60, freq='D')  # Gera uma faixa de 60 dias úteis
+previsao = previsao_futuro(dados, model, data_futura)  # Chama a função para prever futuros preços
+
+print("Previsões para os próximos 60 dias:")
+print(previsao[['previsao','retorno_sentido']])  # Exibindo as previsões finais
+
+if not sumarizado.empty and not previsao.empty:
+    previsao_proximo_dia = previsao.loc[proximo_dia_util, 'previsao'] if proximo_dia_util in previsao.index else "Não disponível"
+    retorno_sentido = previsao.loc[proximo_dia_util, 'retorno_sentido'] if proximo_dia_util in previsao.index else "Não disponível"
     print(f"\nPrevisão para o próximo dia útil ({proximo_dia_util.strftime('%Y-%m-%d')}): {previsao_proximo_dia}")
     print(f"Sentido (1 para subir, 0 para cair): {retorno_sentido}")
